@@ -1,11 +1,10 @@
 import json
 
 import pytest
+from conftest import make_engine
 from fastapi.testclient import TestClient
 
 from minivllm.server.api import create_app
-
-from conftest import make_engine
 
 
 @pytest.fixture

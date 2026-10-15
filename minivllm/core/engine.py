@@ -4,7 +4,8 @@ from __future__ import annotations
 import logging
 import time
 from dataclasses import dataclass, field
-from typing import Optional, Sequence as Seq
+from typing import Optional
+from typing import Sequence as Seq
 
 import torch
 

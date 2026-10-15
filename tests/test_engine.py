@@ -4,11 +4,10 @@ import os
 
 import pytest
 import torch
+from conftest import greedy_reference, make_engine
 
 from minivllm.config import SamplingParams
 from minivllm.core.sequence import SequenceStatus
-
-from conftest import greedy_reference, make_engine
 
 PROMPTS = [
     "hello world, this is a test of the engine",

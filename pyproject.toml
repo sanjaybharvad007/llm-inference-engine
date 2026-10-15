@@ -1,0 +1,31 @@
+[build-system]
+requires = ["setuptools>=64", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "minivllm"
+version = "0.2.0"
+description = "LLM inference & serving engine: paged KV cache, continuous batching, prefix caching, chunked prefill, CUDA graphs, speculative decoding, OpenAI-compatible API"
+requires-python = ">=3.10"
+dependencies = ["torch>=2.4", "fastapi>=0.110", "uvicorn>=0.29", "pydantic>=2", "prometheus-client>=0.20"]
+
+[project.optional-dependencies]
+gpu = ["triton>=3.0"]
+hf = ["safetensors", "transformers"]
+dev = ["pytest", "httpx", "ruff"]
+
+[project.scripts]
+minivllm = "minivllm.cli:main"
+
+[tool.setuptools.packages.find]
+include = ["minivllm*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["tests", "."]
+addopts = "-q"
+filterwarnings = ["ignore::DeprecationWarning"]
+
+[tool.ruff]
+line-length = 120
+target-version = "py310"

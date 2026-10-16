@@ -2,9 +2,11 @@
 FROM pytorch/pytorch:2.4.0-cuda12.1-cudnn9-runtime
 
 WORKDIR /app
-COPY pyproject.toml README.md ./
+COPY pyproject.toml setup.py README.md ./
 COPY minivllm ./minivllm
-RUN pip install --no-cache-dir -e ".[gpu,hf]"
+COPY csrc ./csrc
+# The runtime image has no nvcc: install the Triton path; build with the -devel image to compile csrc/.
+RUN MINIVLLM_SKIP_CUDA=1 pip install --no-cache-dir -e ".[gpu,hf]"
 
 ENV MODEL_PATH=/models/model \
     PORT=8000 \

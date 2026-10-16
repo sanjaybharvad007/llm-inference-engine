@@ -13,8 +13,10 @@ jobs:
       - run: pip install torch --index-url https://download.pytorch.org/whl/cpu
       - run: pip install numpy triton -e ".[dev]"
       - run: ruff check .
-      - run: pytest -q -rfE --tb=short                   # engine / scheduler / block manager / server on CPU
-      - run: TRITON_INTERPRET=1 pytest -q -rfE --tb=short tests/test_kernels.py tests/test_engine.py -k "triton"   # Triton kernels
+      - run: pytest -q -rfE --tb=short                   # engine / scheduler / TP (2 gloo ranks) / quant / draft model / server
+      - run: TRITON_INTERPRET=1 pytest -q -rfE --tb=short tests/test_kernels.py tests/test_quant.py tests/test_engine.py -k "triton or w8a16"
+      - name: type-check the CUDA kernel without a GPU (host stub)
+        run: g++ -fsyntax-only -std=c++17 -Wall -Werror -Wno-unknown-pragmas -x c++ -Icsrc/host_stub_include -include csrc/cuda_host_stub.h csrc/syntax_check.cpp
   docker:
     runs-on: ubuntu-latest
     steps:

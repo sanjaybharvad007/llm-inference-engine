@@ -52,8 +52,12 @@ class EngineConfig:
     max_model_len: int = 4096
     use_cuda_graphs: bool = True
     cuda_graph_batch_sizes: tuple[int, ...] = (1, 2, 4, 8, 16, 32, 64, 128)
+    tensor_parallel_size: int = 1            # one process per GPU; see minivllm.distributed
     speculative_ngram_max: int = 0           # >0 enables n-gram speculative decoding with this many draft tokens
     speculative_ngram_prompt_lookup: int = 3 # n-gram size to match
+    speculative_draft_model: Optional[str] = None   # path to a small HF checkpoint used as draft model
+    speculative_max_draft: int = 4           # draft tokens per step when a draft model is used
+    draft_num_blocks: int = 512              # KV blocks for the draft model's own paged cache
     device: str = "cuda" if torch.cuda.is_available() else "cpu"
     seed: int = 0
 

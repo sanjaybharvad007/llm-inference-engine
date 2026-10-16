@@ -17,6 +17,7 @@ import torch
 from ..config import EngineConfig
 from ..core.block_manager import BlockManager
 from ..core.scheduler import SchedulerOutput
+from ..distributed import parallel_state as ps
 from ..models.llama import AttnMetadata, LlamaForCausalLM
 
 
@@ -108,7 +109,9 @@ class ModelRunner:
         return None
 
     # -- input construction ----------------------------------------------------
-    def build_inputs(self, out: SchedulerOutput):
+    def build_payload(self, out: SchedulerOutput) -> dict:
+        """Flatten a scheduler output into plain lists (picklable: this is what
+        the tensor-parallel driver broadcasts to the worker ranks)."""
         ids, pos, slots, ctx, tables, logits_idx = [], [], [], [], [], []
         cu = [0]
         max_q = 0
@@ -122,37 +125,54 @@ class ModelRunner:
             slots.extend(self.bm.slot_mapping(seq, start, end))
             cu.append(cu[-1] + ss.num_new_tokens)
             ctx.append(end)
-            tables.append(seq.block_table)
+            tables.append(list(seq.block_table))
             max_q = max(max_q, ss.num_new_tokens)
             if ss.samples:
                 # logits for the last prompt token (first decode) + every draft position
                 n_sample = 1 + len(seq.draft_token_ids) if not ss.is_prompt_chunk else 1
                 logits_idx.extend(range(cu[-1] - n_sample, cu[-1]))
-        max_blocks = max(len(t) for t in tables)
-        bt = torch.zeros((len(tables), max_blocks), dtype=torch.int32)
-        for i, t in enumerate(tables):
+        return {"ids": ids, "pos": pos, "slots": slots, "cu": cu, "ctx": ctx, "tables": tables,
+                "logits_idx": logits_idx, "max_q": max_q,
+                "pure_decode": out.num_prefill_tokens == 0 and max_q == 1, "num_seqs": len(out.scheduled)}
+
+    def payload_to_tensors(self, p: dict):
+        max_blocks = max(len(t) for t in p["tables"])
+        bt = torch.zeros((len(p["tables"]), max_blocks), dtype=torch.int32)
+        for i, t in enumerate(p["tables"]):
             bt[i, : len(t)] = torch.tensor(t, dtype=torch.int32)
         dev = self.device
         meta = AttnMetadata(
-            positions=torch.tensor(pos, dtype=torch.int64, device=dev),
-            slot_mapping=torch.tensor(slots, dtype=torch.int64, device=dev),
+            positions=torch.tensor(p["pos"], dtype=torch.int64, device=dev),
+            slot_mapping=torch.tensor(p["slots"], dtype=torch.int64, device=dev),
             block_tables=bt.to(dev),
-            cu_seqlens_q=torch.tensor(cu, dtype=torch.int32, device=dev),
-            context_lens=torch.tensor(ctx, dtype=torch.int32, device=dev),
-            max_q_len=max_q,
-            logits_indices=torch.tensor(logits_idx, dtype=torch.int64, device=dev),
+            cu_seqlens_q=torch.tensor(p["cu"], dtype=torch.int32, device=dev),
+            context_lens=torch.tensor(p["ctx"], dtype=torch.int32, device=dev),
+            max_q_len=p["max_q"],
+            logits_indices=torch.tensor(p["logits_idx"], dtype=torch.int64, device=dev),
         )
-        return torch.tensor(ids, dtype=torch.int64, device=dev), meta
+        return torch.tensor(p["ids"], dtype=torch.int64, device=dev), meta
+
+    def build_inputs(self, out: SchedulerOutput):
+        return self.payload_to_tensors(self.build_payload(out))
 
     # -- execution -----------------------------------------------------------------
     @torch.no_grad()
     def execute(self, out: SchedulerOutput) -> torch.Tensor:
-        """Returns logits [num_sampled_rows, vocab] in the order of ``meta.logits_indices``."""
-        input_ids, meta = self.build_inputs(out)
+        """Returns logits [num_sampled_rows, vocab] in the order of ``meta.logits_indices``.
+
+        Under tensor parallelism this runs on the driver (rank 0): the flattened
+        inputs are broadcast so every rank runs the identical forward pass."""
+        payload = self.build_payload(out)
+        if ps.get_tp().enabled:
+            ps.broadcast_object(payload, src=0)
+        return self.execute_payload(payload)
+
+    @torch.no_grad()
+    def execute_payload(self, payload: dict) -> torch.Tensor:
+        input_ids, meta = self.payload_to_tensors(payload)
         t0 = time.perf_counter()
-        pure_decode = out.num_prefill_tokens == 0 and meta.max_q_len == 1
-        n = len(out.scheduled)
-        graph = self._graph_for(n) if (self.use_graphs and pure_decode) else None
+        n = payload["num_seqs"]
+        graph = self._graph_for(n) if (self.use_graphs and payload["pure_decode"]) else None
         if graph is not None:
             logits = graph.replay(input_ids, meta.positions, meta.slot_mapping, meta.block_tables, meta.context_lens)
             self.stats.num_graph_replays += 1
@@ -164,3 +184,11 @@ class ModelRunner:
         self.stats.forward_time_s += time.perf_counter() - t0
         self.stats.tokens_processed += int(input_ids.shape[0])
         return logits
+
+    def worker_loop(self) -> None:
+        """Non-driver ranks: execute broadcast payloads until the driver sends None."""
+        while True:
+            payload = ps.broadcast_object(None, src=0)
+            if payload is None:
+                return
+            self.execute_payload(payload)

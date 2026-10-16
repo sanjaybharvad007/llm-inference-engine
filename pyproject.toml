@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "minivllm"
-version = "0.2.0"
+version = "0.3.0"
 description = "LLM inference & serving engine: paged KV cache, continuous batching, prefix caching, chunked prefill, CUDA graphs, speculative decoding, OpenAI-compatible API"
 requires-python = ">=3.10"
 dependencies = ["torch>=2.4", "numpy", "fastapi>=0.110", "uvicorn>=0.29", "pydantic>=2", "prometheus-client>=0.20"]

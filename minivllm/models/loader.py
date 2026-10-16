@@ -47,10 +47,5 @@ def load_hf_llama(model_cls, path: str, dtype: torch.dtype, device: str):
     for name, tensor in state.items():
         n = name.replace("model.", "", 1) if name.startswith("model.") else name
         mapped[n] = tensor.to(dtype)
-    if cfg.tie_word_embeddings and "lm_head.weight" not in mapped:
-        mapped["lm_head.weight"] = mapped["embed_tokens.weight"]
-    missing, unexpected = model.load_state_dict(mapped, strict=False)
-    missing = [m for m in missing if not m.startswith("rope.")]
-    if missing:
-        raise RuntimeError(f"missing weights: {missing[:5]}...")
+    model.load_full_state_dict(mapped)   # shards for the local tensor-parallel rank
     return model.eval()

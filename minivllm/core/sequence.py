@@ -85,6 +85,7 @@ class Sequence:
         self.block_table = []
         self.num_computed_tokens = 0
         self.num_cached_tokens = 0
+        self.draft_token_ids = []        # drafts are re-proposed after the recompute prefill
         self.status = SequenceStatus.WAITING
 
     def finish(self, status: SequenceStatus) -> None:

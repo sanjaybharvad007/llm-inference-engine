@@ -168,9 +168,41 @@ def paged_attention_triton(q, key_cache, value_cache, block_tables, cu_seqlens_q
     return o
 
 
+# ----------------------------------------------------------------------------
+# CUDA C++ kernel (csrc/paged_attention_kernel.cuh) and dispatch
+# ----------------------------------------------------------------------------
+
+CUDA_MAX_Q_LEN = 8   # per-token blocks don't reuse K/V across queries: longer chunks go to Triton
+
+
+def paged_attention_cuda(q, key_cache, value_cache, block_tables, cu_seqlens_q, context_lens, scale=None):
+    from .cuda_ext import load_ext
+
+    scale = 1.0 / math.sqrt(q.shape[-1]) if scale is None else scale
+    return load_ext().paged_attention_fwd(q.contiguous(), key_cache, value_cache, block_tables, cu_seqlens_q,
+                                          context_lens, float(scale))
+
+
+def cuda_kernel_supports(q, key_cache, max_q_len: int) -> bool:
+    from .cuda_ext import available
+
+    return (q.is_cuda and max_q_len <= CUDA_MAX_Q_LEN and q.shape[-1] in (64, 128) and key_cache.shape[1] in (8, 16, 32)
+            and q.dtype in (torch.float16, torch.bfloat16, torch.float32) and available())
+
+
 def paged_attention(q, key_cache, value_cache, block_tables, cu_seqlens_q, context_lens, max_q_len, scale=None):
-    """Dispatch: Triton on CUDA (or under TRITON_INTERPRET=1), torch reference otherwise."""
+    """Dispatch (``MINIVLLM_ATTN_BACKEND`` = auto | cuda | triton | reference):
+
+    * ``cuda``:      the C++ kernel — decode steps and short speculative-verification chunks on CUDA
+    * ``triton``:    FlashAttention-style tiled kernel — prefill chunks on CUDA, everything under TRITON_INTERPRET=1
+    * ``reference``: pure torch, CPU / tests
+    """
+    backend = os.environ.get("MINIVLLM_ATTN_BACKEND", "auto")
+    if backend in ("auto", "cuda") and cuda_kernel_supports(q, key_cache, max_q_len):
+        return paged_attention_cuda(q, key_cache, value_cache, block_tables, cu_seqlens_q, context_lens, scale)
+    if backend == "cuda":
+        raise RuntimeError("CUDA paged-attention kernel requested but unavailable/unsupported for these inputs")
     use_triton = HAS_TRITON and (q.is_cuda or os.environ.get("TRITON_INTERPRET", "0") == "1")
-    if use_triton and os.environ.get("MINIVLLM_ATTN_BACKEND", "auto") != "reference":
+    if use_triton and backend != "reference":
         return paged_attention_triton(q, key_cache, value_cache, block_tables, cu_seqlens_q, context_lens, max_q_len, scale)
     return paged_attention_reference(q, key_cache, value_cache, block_tables, cu_seqlens_q, context_lens, scale)
